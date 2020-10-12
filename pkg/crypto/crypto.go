@@ -3,6 +3,7 @@ package crypto
 import (
 	"crypto/md5"
 	"fmt"
+	"github.com/dgrijalva/jwt-go"
 	"github.com/micro/go-micro/v2/util/log"
 	"golang.org/x/crypto/bcrypt"
 	"math/rand"
@@ -49,4 +50,20 @@ func Md5(str string) string {
 	has := md5.Sum(data)
 	md5str := fmt.Sprintf("%x", has)
 	return md5str
+}
+
+func CreateToken(uid, secret string, MaxAge ...int64) (string, error) {
+	var lifeTime int64 = 7200
+	if len(MaxAge) > 1 {
+		lifeTime = MaxAge[0]
+	}
+	at := jwt.NewWithClaims(jwt.SigningMethodES256, jwt.MapClaims{
+		"uid":    uid,
+		"MaxAge": lifeTime,
+	})
+	token, err := at.SignedString([]byte(secret))
+	if err != nil {
+		return "", err
+	}
+	return token, nil
 }

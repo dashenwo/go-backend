@@ -2,11 +2,20 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	conf "github.com/dashenwo/go-backend/v2/console/account/config"
+	"github.com/dashenwo/go-backend/v2/console/account/global"
 	"github.com/dashenwo/go-backend/v2/console/account/internal/service"
 	"github.com/dashenwo/go-backend/v2/console/account/proto"
+	"github.com/dashenwo/go-backend/v2/pkg/crypto"
 	"github.com/dashenwo/go-backend/v2/pkg/utils/validate"
+	"github.com/fatih/structs"
+	"github.com/micro/go-micro/v2/errors"
 	"github.com/micro/go-micro/v2/util/log"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
+	"net/http"
+	"time"
 )
 
 type Account struct {
@@ -30,21 +39,10 @@ func (a *Account) Login(ctx context.Context, req *proto.LoginRequest, res *proto
 	if err != nil {
 		return err
 	}
-
-	//// 生成token
-	//token := crypto.Md5("token:" + req.Source + "_" + user.ID)
-	//log.Info(global.Redis)
-	//// 保存数据到redis
-	//data, _ := json.Marshal(user)
-	//if err := global.Redis.Set(token, string(data), time.Hour*2).Err(); err != nil {
-	//	return errors.New(conf.AppId, "设置用户登录状态失败", 504)
-	//}
-	//now := time.Now()
-	//hh, _ := time.ParseDuration("1h")
-	// 返回token
-	//res.Token = token
-	//res.Expires = now.Add(2 * hh).Format("2006-01-02 15:04:05")
-	log.Info(user, err)
+	// 保存session
+	if err = saveSession(ctx, structs.Map(user), user.ID, req.Source); err != nil {
+		return errors.New(conf.AppId, err.Error(), 506)
+	}
 	return nil
 }
 
@@ -69,5 +67,52 @@ func (a *Account) Info(ctx context.Context, req *proto.InfoRequest, res *proto.I
 	return nil
 }
 func (a *Account) Update(ctx context.Context, req *proto.UpdateRequest, res *proto.UpdateResponse) error {
+	return nil
+}
+
+// 保存session
+func saveSession(ctx context.Context, data map[string]interface{}, userId, source string) error {
+	if data == nil {
+		data = make(map[string]interface{})
+	}
+	var (
+		maxAge    = global.Config.Session.Expire
+		jwtData   string
+		insetByte []byte
+		err       error
+	)
+	switch source {
+	case "web":
+		maxAge = 7200
+	case "ios":
+		maxAge = 3600 * 24 * 30
+	}
+	jwtData, err = crypto.CreateToken(userId, global.Config.Session.Secret, maxAge)
+	if err != nil {
+		return err
+	}
+	token := crypto.Md5(jwtData)
+	data["token"] = token
+	key := global.Config.Session.Prefix + ":" + token
+	// 序列化数据
+	if insetByte, err = json.Marshal(data); err != nil {
+		return err
+	}
+	insetStr := crypto.Base64Encode(insetByte)
+	// 插入redis
+	if err = global.Redis.Set(global.Redis.Context(), key, insetStr, time.Duration(maxAge)*time.Second).Err(); err != nil {
+		return err
+	}
+	// 发送header
+	sessionCookie := &http.Cookie{
+		Name:    global.Config.Session.Name,
+		Path:    "/",
+		Value:   token,
+		Expires: time.Now().Add(time.Duration(maxAge) * time.Second),
+	}
+	header := metadata.Pairs(
+		"Set-Cookie", sessionCookie.String(),
+	)
+	_ = grpc.SendHeader(ctx, header)
 	return nil
 }
