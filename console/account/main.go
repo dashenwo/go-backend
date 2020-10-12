@@ -4,6 +4,7 @@ import (
 	conf "github.com/dashenwo/go-backend/v2/console/account/config"
 	"github.com/dashenwo/go-backend/v2/console/account/handler"
 	"github.com/dashenwo/go-backend/v2/console/account/registry"
+	"github.com/dashenwo/go-backend/v2/console/account/wrapper/header"
 	tracer "github.com/dashenwo/go-backend/v2/pkg/opentracing"
 	"github.com/dashenwo/plugins/logger/zap/v2"
 	"github.com/micro/cli/v2"
@@ -71,7 +72,7 @@ func main() {
 		// Tracing仅由Gateway控制，在下游服务中仅在有Tracing时启动
 		micro.WrapCall(opentracing.NewCallWrapper(t)),
 		micro.WrapHandler(opentracing.NewHandlerWrapper(t)),
-		//micro.WrapHandler(sessions.NewSessionWrapper()),
+		//micro.WrapHandler(header.NewHeaderWrapper()),
 	)
 	// 初始化服务
 	service.Init()

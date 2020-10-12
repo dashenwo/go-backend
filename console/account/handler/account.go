@@ -40,7 +40,7 @@ func (a *Account) Login(ctx context.Context, req *proto.LoginRequest, res *proto
 		return err
 	}
 	// 保存session
-	if err = saveSession(ctx, structs.Map(user), user.ID, req.Source); err != nil {
+	if err = a.saveSession(ctx, structs.Map(user), user.ID, req.Source); err != nil {
 		return errors.New(conf.AppId, err.Error(), 506)
 	}
 	return nil
@@ -71,7 +71,7 @@ func (a *Account) Update(ctx context.Context, req *proto.UpdateRequest, res *pro
 }
 
 // 保存session
-func saveSession(ctx context.Context, data map[string]interface{}, userId, source string) error {
+func (a *Account) saveSession(ctx context.Context, data map[string]interface{}, userId, source string) error {
 	if data == nil {
 		data = make(map[string]interface{})
 	}
@@ -83,7 +83,7 @@ func saveSession(ctx context.Context, data map[string]interface{}, userId, sourc
 	)
 	switch source {
 	case "web":
-		maxAge = 7200
+		maxAge = 3600 * 2
 	case "ios":
 		maxAge = 3600 * 24 * 30
 	}

@@ -57,9 +57,9 @@ func CreateToken(uid, secret string, MaxAge ...int64) (string, error) {
 	if len(MaxAge) > 1 {
 		lifeTime = MaxAge[0]
 	}
-	at := jwt.NewWithClaims(jwt.SigningMethodES256, jwt.MapClaims{
-		"uid":    uid,
-		"MaxAge": lifeTime,
+	at := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"uid":     uid,
+		"max_age": lifeTime,
 	})
 	token, err := at.SignedString([]byte(secret))
 	if err != nil {
