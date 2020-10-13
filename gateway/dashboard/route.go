@@ -14,618 +14,646 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package route
+package service
 
 import (
 	"encoding/json"
-	"net/http"
-	"regexp"
-	"strconv"
+	"fmt"
+	"io/ioutil"
+	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/apisix/manager-api/conf"
 	"github.com/apisix/manager-api/errno"
-	"github.com/apisix/manager-api/service"
-	"github.com/gin-gonic/gin"
+	"github.com/apisix/manager-api/log"
+	"github.com/apisix/manager-api/utils"
 	uuid "github.com/satori/go.uuid"
 )
 
-func AppendRoute(r *gin.Engine) *gin.Engine {
-	r.POST("/apisix/admin/routes", createRoute)
-	r.GET("/apisix/admin/routes/:rid", findRoute)
-	r.GET("/apisix/admin/routes", listRoute)
-	r.PUT("/apisix/admin/routes/:rid", updateRoute)
-	r.PUT("/apisix/admin/routes/:rid/publish", publishRoute)
-	r.DELETE("/apisix/admin/routes/:rid", deleteRoute)
-	r.GET("/apisix/admin/notexist/routes", isRouteExist)
-	r.PUT("/apisix/admin/routes/:rid/offline", offlineRoute)
-	r.GET("/apisix/admin/routes/:rid/debuginfo", getRouteWithApisixUrl)
-	return r
-}
+const (
+	ContentType      = "application/json"
+	HTTP             = "http"
+	HTTPS            = "https"
+	SCHEME           = "scheme"
+	WEBSOCKET        = "websocket"
+	REDIRECT         = "redirect"
+	PROXY_REWRIETE   = "proxy-rewrite"
+	UPATHTYPE_STATIC = "static"
+	UPATHTYPE_REGX   = "regx"
+	UPATHTYPE_KEEP   = "keep"
+)
 
-func publishRoute(c *gin.Context) {
-	rid := c.Param("rid")
-	r := &service.Route{}
-	tx := conf.DB().Begin()
-	if err := tx.Model(&service.Route{}).Where("id = ?", rid).Update("status", true).Find(&r).Error; err != nil {
-		tx.Rollback()
-		e := errno.FromMessage(errno.RoutePublishError, err.Error())
-		logger.Error(e.Msg)
-		c.AbortWithStatusJSON(http.StatusInternalServerError, e.Response())
-		return
+var logger = log.GetLogger()
+
+func (r *RouteRequest) Parse(body interface{}) error {
+	if err := json.Unmarshal(body.([]byte), r); err != nil {
+		r = nil
+		return err
 	} else {
-		routeRequest := &service.RouteRequest{}
-		if err := json.Unmarshal([]byte(r.Content), routeRequest); err != nil {
-			tx.Rollback()
-			e := errno.FromMessage(errno.RoutePublishError, err.Error())
-			logger.Error(e.Msg)
-			c.AbortWithStatusJSON(http.StatusInternalServerError, e.Response())
-			return
-		} else {
-			routeRequest.Status = true
+		if r.Uris == nil || len(r.Uris) < 1 {
+			r.Uris = []string{"/*"}
 		}
-		if content, err := json.Marshal(routeRequest); err != nil {
-			tx.Rollback()
-			e := errno.FromMessage(errno.RoutePublishError, err.Error())
-			logger.Error(e.Msg)
-			c.AbortWithStatusJSON(http.StatusInternalServerError, e.Response())
-			return
-		} else {
-			r.Content = string(content)
-		}
-		arr := service.ToApisixRequest(routeRequest)
-		var resp *service.ApisixRouteResponse
-		if resp, err = arr.Create(rid); err != nil {
-			tx.Rollback()
-			if httpError, ok := err.(*errno.HttpError); ok {
-				c.AbortWithStatusJSON(httpError.Code, httpError.Msg)
-				return
-			} else {
-				e := errno.FromMessage(errno.ApisixRouteCreateError, err.Error())
-				logger.Error(e.Msg)
-				c.AbortWithStatusJSON(http.StatusInternalServerError, e.Response())
-				return
+		if len(strings.Trim(r.RouteGroupId, "")) > 0 {
+			routeGroup := &RouteGroupDao{}
+			if err, _ := routeGroup.FindRouteGroup(r.RouteGroupId); err != nil {
+				return err
 			}
-		} else {
-			resp.Node.Value.Name = r.Name
-			resp.Node.Value.Status = r.Status
-			if respStr, err := json.Marshal(resp); err != nil {
-				e := errno.FromMessage(errno.RoutePublishError, err.Error())
-				logger.Error(e.Msg)
-				c.AbortWithStatusJSON(http.StatusInternalServerError, e.Response())
-				return
-			} else {
-				r.ContentAdminApi = string(respStr)
-			}
-		}
-		if err := tx.Commit().Error; err == nil {
-			// update content_admin_api
-			if err := conf.DB().Model(&service.Route{}).Update(r).Error; err != nil {
-				e := errno.FromMessage(errno.DBRouteUpdateError, err.Error())
-				logger.Error(e.Msg)
-			}
+			r.RouteGroupName = routeGroup.Name
 		}
 	}
-	c.Data(http.StatusOK, service.ContentType, errno.Success())
+	return nil
 }
 
-func offlineRoute(c *gin.Context) {
-	rid := c.Param("rid")
-	db := conf.DB()
-	tx := db.Begin()
-	route := &service.Route{}
-	if err := tx.Model(&service.Route{}).Where("id = ?", rid).Update(map[string]interface{}{"status": 0, "content_admin_api": ""}).First(&route).Error; err != nil {
-		tx.Rollback()
-		e := errno.FromMessage(errno.RoutePublishError, err.Error())
-		logger.Error(e.Msg)
-		c.AbortWithStatusJSON(http.StatusInternalServerError, e.Response())
-		return
-	} else {
-		routeRequest := &service.RouteRequest{}
-		if err := json.Unmarshal([]byte(route.Content), routeRequest); err != nil {
-			tx.Rollback()
-			e := errno.FromMessage(errno.RoutePublishError, err.Error())
-			logger.Error(e.Msg)
-			c.AbortWithStatusJSON(http.StatusInternalServerError, e.Response())
-			return
-		} else {
-			routeRequest.Status = false
-		}
-		if content, err := json.Marshal(routeRequest); err != nil {
-			tx.Rollback()
-			e := errno.FromMessage(errno.RoutePublishError, err.Error())
-			logger.Error(e.Msg)
-			c.AbortWithStatusJSON(http.StatusInternalServerError, e.Response())
-			return
-		} else {
-			route.Content = string(content)
-		}
-		request := &service.ApisixRouteRequest{}
-		if _, err := request.Delete(rid); err != nil {
-			tx.Rollback()
-			if httpError, ok := err.(*errno.HttpError); ok {
-				c.AbortWithStatusJSON(httpError.Code, httpError.Msg)
-				return
-			} else {
-				e := errno.FromMessage(errno.ApisixRouteDeleteError, err.Error())
-				logger.Error(e.Msg)
-				c.AbortWithStatusJSON(http.StatusInternalServerError, e.Response())
-				return
-			}
-		}
-		if err := tx.Model(&service.Route{}).Update(route).Error; err != nil {
-			tx.Rollback()
-			e := errno.FromMessage(errno.DBRouteUpdateError, err.Error())
-			logger.Error(e.Msg)
-			return
-		}
-	}
-	if err := tx.Commit().Error; err != nil {
-		e := errno.FromMessage(errno.ApisixRouteDeleteError, err.Error())
-		logger.Error(e.Msg)
-	}
-	c.Data(http.StatusOK, service.ContentType, errno.Success())
+func (arr *ApisixRouteRequest) Parse(r *RouteRequest) {
+	arr.Desc = r.Desc
+	arr.Priority = r.Priority
+	arr.Methods = r.Methods
+	arr.Uris = r.Uris
+	arr.Hosts = r.Hosts
+	arr.Vars = r.Vars
+	arr.Upstream = r.Upstream
+	arr.Plugins = r.Plugins
 }
 
-func isRouteExist(c *gin.Context) {
-	if name, exist := c.GetQuery("name"); exist {
-		db := conf.DB()
-		db = db.Table("routes")
-		exclude, exist := c.GetQuery("exclude")
-		if exist {
-			db = db.Where("name=? and id<>?", name, exclude)
-		} else {
-			db = db.Where("name=?", name)
-		}
-		var count int
-		err := db.Count(&count).Error
-		if err != nil {
-			e := errno.FromMessage(errno.RouteRequestError, err.Error())
-			logger.Error(e.Msg)
-			c.AbortWithStatusJSON(http.StatusInternalServerError, e.Response())
-			return
-		} else {
-			if count == 0 {
-				c.Data(http.StatusOK, service.ContentType, errno.Success())
-				return
-			} else {
-				e := errno.FromMessage(errno.DBRouteReduplicateError, name)
-				c.AbortWithStatusJSON(http.StatusBadRequest, e.Response())
-				return
-			}
-		}
+func (rd *Route) Parse(r *RouteRequest, arr *ApisixRouteRequest) error {
+	//rd.Name = arr.Name
+	rd.Description = arr.Desc
+	rd.UpstreamId = r.UpstreamId
+	rd.RouteGroupId = r.RouteGroupId
+	rd.RouteGroupName = r.RouteGroupName
+	rd.Status = r.Status
+	if content, err := json.Marshal(r); err != nil {
+		return err
 	} else {
-		e := errno.FromMessage(errno.RouteRequestError, "name is needed")
-		c.AbortWithStatusJSON(http.StatusBadRequest, e.Response())
-		return
+		rd.Content = string(content)
+	}
+	if script, err := json.Marshal(r.Script); err != nil {
+		return err
+	} else {
+		rd.Script = string(script)
+	}
+	timestamp := time.Now().Unix()
+	rd.CreateTime = timestamp
+	rd.Priority = r.Priority
+	return nil
+}
+
+func (arr *ApisixRouteRequest) FindById(rid string) (*ApisixRouteResponse, error) {
+	url := fmt.Sprintf("%s/routes/%s", conf.BaseUrl, rid)
+	if resp, err := utils.Get(url); err != nil {
+		logger.Error(err.Error())
+		return nil, err
+	} else {
+		var arresp ApisixRouteResponse
+		if err := json.Unmarshal(resp, &arresp); err != nil {
+			logger.Error(err.Error())
+			return nil, err
+		} else {
+			return &arresp, nil
+		}
 	}
 }
 
-func listRoute(c *gin.Context) {
-	db := conf.DB()
-	size, _ := strconv.Atoi(c.Query("size"))
-	page, _ := strconv.Atoi(c.Query("page"))
-	if size == 0 {
-		size = 10
-	}
-	db = db.Table("routes")
-	isSearch := true
-	if name, exist := c.GetQuery("name"); exist {
-		db = db.Where("name like ? ", "%"+name+"%")
-		isSearch = false
-	}
-	if description, exist := c.GetQuery("description"); exist {
-		db = db.Where("description like ? ", "%"+description+"%")
-		isSearch = false
-	}
-	if host, exist := c.GetQuery("host"); exist {
-		db = db.Where("hosts like ? ", "%"+host+"%")
-		isSearch = false
-	}
-	if uri, exist := c.GetQuery("uri"); exist {
-		db = db.Where("uris like ? ", "%"+uri+"%")
-		isSearch = false
-	}
-	if ip, exist := c.GetQuery("ip"); exist {
-		db = db.Where("upstream_nodes like ? ", "%"+ip+"%")
-		isSearch = false
-	}
-	if rgid, exist := c.GetQuery("route_group_id"); exist {
-		db = db.Where("route_group_id = ?", rgid)
-		isSearch = false
-	}
-	if rgName, exist := c.GetQuery("route_group_name"); exist {
-		db = db.Where("route_group_name like ?", "%"+rgName+"%")
-		isSearch = false
-	}
-	// search
-	if isSearch {
-		if search, exist := c.GetQuery("search"); exist {
-			s := "%" + search + "%"
-			db = db.Where("name like ? or description like ? or hosts like ? or uris like ? or upstream_nodes like ? or route_group_id = ? or route_group_name like ?", s, s, s, s, s, search, s)
-		}
-	}
-	// mysql
-	routeList := []service.Route{}
-	var count int
-	if err := db.Order("priority, update_time desc").Table("routes").Offset((page - 1) * size).Limit(size).Find(&routeList).Error; err != nil {
-		e := errno.FromMessage(errno.RouteRequestError, err.Error())
-		logger.Error(e.Msg)
-		c.AbortWithStatusJSON(http.StatusBadRequest, e.Response())
-		return
+func (arr *ApisixRouteRequest) Update(rid string) (*ApisixRouteResponse, error) {
+	url := fmt.Sprintf("%s/routes/%s", conf.BaseUrl, rid)
+	if b, err := json.Marshal(arr); err != nil {
+		return nil, err
 	} else {
-		responseList := make([]service.RouteResponse, 0)
-		for _, r := range routeList {
-			response := &service.RouteResponse{}
-			response.Parse(&r)
-			responseList = append(responseList, *response)
+		fmt.Println(string(b))
+		if resp, err := utils.Put(url, b); err != nil {
+			logger.Error(err.Error())
+			return nil, err
+		} else {
+			var arresp ApisixRouteResponse
+			if err := json.Unmarshal(resp, &arresp); err != nil {
+				logger.Error(err.Error())
+				return nil, err
+			} else {
+				return &arresp, nil
+			}
 		}
-		if err := db.Count(&count).Error; err != nil {
-			e := errno.FromMessage(errno.RouteRequestError, err.Error())
-			logger.Error(e.Msg)
-			c.AbortWithStatusJSON(http.StatusInternalServerError, e.Response())
-			return
-		}
-		result := &service.ListResponse{Count: count, Data: responseList}
-		resp, _ := json.Marshal(result)
-		c.Data(http.StatusOK, service.ContentType, resp)
 	}
 }
 
-func deleteRoute(c *gin.Context) {
-	rid := c.Param("rid")
-	db := conf.DB()
-	tx := db.Begin()
-	defer func() {
-		if r := recover(); r != nil {
-			tx.Rollback()
-		}
-	}()
-	// delete from mysql
-	rd := &service.Route{}
-	rd.ID = uuid.FromStringOrNil(rid)
-	if err := db.Table("routes").Where("id=?", rid).First(&rd).Error; err != nil {
-		e := errno.FromMessage(errno.RouteRequestError, err.Error()+" route ID: "+rid)
-		logger.Error(e.Msg)
-		c.AbortWithStatusJSON(http.StatusInternalServerError, e.Response())
-		return
-	}
-	if err := conf.DB().Delete(rd).Error; err != nil {
-		tx.Rollback()
-		e := errno.FromMessage(errno.DBRouteDeleteError, err.Error())
-		logger.Error(e.Msg)
-		c.AbortWithStatusJSON(http.StatusInternalServerError, e.Response())
-		return
-	} else if rd.Status {
-		request := &service.ApisixRouteRequest{}
-		if _, err := request.Delete(rid); err != nil {
-			tx.Rollback()
-			if httpError, ok := err.(*errno.HttpError); ok {
-				c.AbortWithStatusJSON(httpError.Code, httpError.Msg)
-				return
-			} else {
-				e := errno.FromMessage(errno.ApisixRouteDeleteError, err.Error())
-				logger.Error(e.Msg)
-				c.AbortWithStatusJSON(http.StatusInternalServerError, e.Response())
-				return
-			}
-		}
-	}
-	if err := tx.Commit().Error; err != nil {
-		e := errno.FromMessage(errno.ApisixRouteDeleteError, err.Error())
-		logger.Error(e.Msg)
-	}
-	c.Data(http.StatusOK, service.ContentType, errno.Success())
-}
-func updateRoute(c *gin.Context) {
-	rid := c.Param("rid")
-	param, exist := c.Get("requestBody")
-	if !exist || len(param.([]byte)) < 1 {
-		e := errno.FromMessage(errno.RouteRequestError, "route create with no post data")
-		logger.Error(e.Msg)
-		c.AbortWithStatusJSON(http.StatusBadRequest, e.Response())
-		return
-	}
-	routeRequest := &service.RouteRequest{}
-	if err := routeRequest.Parse(param); err != nil {
-		e := errno.FromMessage(errno.RouteRequestError, err.Error())
-		logger.Error(e.Msg)
-		c.AbortWithStatusJSON(http.StatusBadRequest, e.Response())
-		return
-	}
-	routeGroup := &service.RouteGroupDao{}
-	isCreateGroup := false
-	isUngroup := false
-	if len(strings.Trim(routeRequest.RouteGroupId, "")) == 0 {
-		if len(strings.Trim(routeRequest.RouteGroupName, "")) > 0 {
-			isCreateGroup = true
-			routeGroup.ID = uuid.NewV4()
-			// create route group
-			routeGroup.Name = routeRequest.RouteGroupName
-			routeRequest.RouteGroupId = routeGroup.ID.String()
-		} else {
-			isUngroup = true
-		}
-	}
-	logger.Info(routeRequest.Plugins)
-	db := conf.DB()
-	arr := service.ToApisixRequest(routeRequest)
-	var resp *service.ApisixRouteResponse
-	var r *service.Route
-	if rd, err := service.ToRoute(routeRequest, arr, uuid.FromStringOrNil(rid), nil); err != nil {
-		c.AbortWithStatusJSON(http.StatusInternalServerError, err.Response())
-		return
+func (arr *ApisixRouteRequest) Create(rid string) (*ApisixRouteResponse, error) {
+	url := fmt.Sprintf("%s/routes/%s", conf.BaseUrl, rid)
+	if b, err := json.Marshal(arr); err != nil {
+		return nil, err
 	} else {
-		r = rd
-		tx := db.Begin()
-		defer func() {
-			if r := recover(); r != nil {
-				tx.Rollback()
-			}
-		}()
-		logger.Info(rd)
-		if isCreateGroup {
-			if err := tx.Model(&service.RouteGroupDao{}).Create(routeGroup).Error; err != nil {
-				tx.Rollback()
-				e := errno.FromMessage(errno.DuplicateRouteGroupName, routeGroup.Name)
-				logger.Error(e.Msg)
-				c.AbortWithStatusJSON(http.StatusInternalServerError, e.Response())
-				return
+		fmt.Println(string(b))
+		if resp, err := utils.Put(url, b); err != nil {
+			logger.Error(err.Error())
+			return nil, err
+		} else {
+			var arresp ApisixRouteResponse
+			if err := json.Unmarshal(resp, &arresp); err != nil {
+				logger.Error(err.Error())
+				return nil, err
+			} else {
+				return &arresp, nil
 			}
 		}
-		if err := tx.Model(&service.Route{}).Update(rd).Error; err != nil {
-			// rollback
-			tx.Rollback()
-			e := errno.FromMessage(errno.DBRouteCreateError, err.Error())
-			logger.Error(e.Msg)
-			c.AbortWithStatusJSON(http.StatusInternalServerError, e.Response())
-			return
-		} else if rd.Status {
-			if resp, err = arr.Update(rid); err != nil {
-				tx.Rollback()
-				if httpError, ok := err.(*errno.HttpError); ok {
-					c.AbortWithStatusJSON(httpError.Code, httpError.Msg)
-					return
+	}
+}
+
+func (arr *ApisixRouteRequest) Delete(rid string) (*ApisixRouteResponse, error) {
+	url := fmt.Sprintf("%s/routes/%s", conf.BaseUrl, rid)
+	if resp, err := utils.Delete(url); err != nil {
+		logger.Error(err.Error())
+		return nil, err
+	} else {
+		var arresp ApisixRouteResponse
+		if err := json.Unmarshal(resp, &arresp); err != nil {
+			logger.Error(err.Error())
+			return nil, err
+		} else {
+			return &arresp, nil
+		}
+	}
+}
+
+type RouteRequest struct {
+	ID               string                 `json:"id,omitempty"`
+	Name             string                 `json:"name"`
+	Desc             string                 `json:"desc,omitempty"`
+	Priority         int64                  `json:"priority,omitempty"`
+	Methods          []string               `json:"methods,omitempty"`
+	Uris             []string               `json:"uris"`
+	Hosts            []string               `json:"hosts,omitempty"`
+	Protocols        []string               `json:"protocols,omitempty"`
+	Redirect         *Redirect              `json:"redirect,omitempty"`
+	Vars             [][]string             `json:"vars,omitempty"`
+	Upstream         *Upstream              `json:"upstream,omitempty"`
+	UpstreamId       string                 `json:"upstream_id,omitempty"`
+	UpstreamProtocol string                 `json:"upstream_protocol,omitempty"`
+	UpstreamPath     *UpstreamPath          `json:"upstream_path,omitempty"`
+	UpstreamHeader   map[string]string      `json:"upstream_header,omitempty"`
+	Plugins          map[string]interface{} `json:"plugins"`
+	Script           map[string]interface{} `json:"script"`
+	RouteGroupId     string                 `json:"route_group_id"`
+	RouteGroupName   string                 `json:"route_group_name"`
+	Status           bool                   `json:"status"`
+}
+
+func (r *ApisixRouteResponse) Parse() (*RouteRequest, error) {
+	o := r.Node.Value
+
+	//Protocols from vars and upstream
+	protocols := make([]string, 0)
+	if o.Upstream != nil && o.Upstream.EnableWebsocket {
+		protocols = append(protocols, WEBSOCKET)
+	}
+	if o.UpstreamId != "" {
+		protocols = append(protocols, WEBSOCKET)
+	}
+	flag := true
+	for _, t := range o.Vars {
+		if t[0] == SCHEME {
+			flag = false
+			protocols = append(protocols, t[2])
+		}
+	}
+	if flag {
+		protocols = append(protocols, HTTP)
+		protocols = append(protocols, HTTPS)
+	}
+	//Redirect from plugins
+	redirect := &Redirect{}
+	upstreamProtocol := UPATHTYPE_KEEP
+	upstreamHeader := make(map[string]string)
+	upstreamPath := &UpstreamPath{}
+	for k, v := range o.Plugins {
+		if k == REDIRECT {
+			if bytes, err := json.Marshal(v); err != nil {
+				return nil, err
+			} else {
+				if err := json.Unmarshal(bytes, redirect); err != nil {
+					return nil, err
+				}
+			}
+
+		}
+		if k == PROXY_REWRIETE {
+			pr := &ProxyRewrite{}
+			if bytes, err := json.Marshal(v); err != nil {
+				return nil, err
+			} else {
+				if err := json.Unmarshal(bytes, pr); err != nil {
+					return nil, err
 				} else {
-					e := errno.FromMessage(errno.ApisixRouteCreateError, err.Error())
-					logger.Error(e.Msg)
-					c.AbortWithStatusJSON(http.StatusInternalServerError, e.Response())
-					return
-				}
-			}
-		}
-		if isUngroup {
-			if err := tx.Model(&service.Route{}).Where("id = ?", rid).Update(map[string]interface{}{"route_group_id": "", "route_group_name": ""}).Error; err != nil {
-				tx.Rollback()
-				e := errno.FromMessage(errno.SetRouteUngroupError)
-				logger.Error(e.Msg)
-				c.AbortWithStatusJSON(http.StatusInternalServerError, e.Response())
-				return
-			}
-		}
-		if err := tx.Commit().Error; err == nil && r.Status {
-			// update content_admin_api
-			if rd, err := service.ToRoute(routeRequest, arr, uuid.FromStringOrNil(rid), resp); err != nil {
-				e := errno.FromMessage(errno.DBRouteUpdateError, err.Error())
-				logger.Error(e.Msg)
-			} else {
-				if err := conf.DB().Model(&service.Route{}).Update(rd).Error; err != nil {
-					e := errno.FromMessage(errno.DBRouteUpdateError, err.Error())
-					logger.Error(e.Msg)
+					if pr.Scheme != "" {
+						upstreamProtocol = pr.Scheme
+					}
+					upstreamHeader = pr.Headers
+					if (pr.RegexUri == nil || len(pr.RegexUri) < 2) && pr.Uri == "" {
+						upstreamPath = nil
+					} else if pr.RegexUri == nil || len(pr.RegexUri) < 2 {
+						upstreamPath.UPathType = UPATHTYPE_STATIC
+						upstreamPath.To = pr.Uri
+					} else {
+						upstreamPath.UPathType = UPATHTYPE_REGX
+						upstreamPath.From = pr.RegexUri[0]
+						upstreamPath.To = pr.RegexUri[1]
+					}
 				}
 			}
 		}
 	}
-	c.Data(http.StatusOK, service.ContentType, errno.Success())
+	//Vars
+	requestVars := make([][]string, 0)
+	for _, t := range o.Vars {
+		if t[0] != SCHEME {
+			requestVars = append(requestVars, t)
+		}
+	}
+	//Plugins
+	requestPlugins := utils.CopyMap(o.Plugins)
+	delete(requestPlugins, REDIRECT)
+	delete(requestPlugins, PROXY_REWRIETE)
+
+	// check if upstream is not exist
+	if o.Upstream == nil && o.UpstreamId == "" {
+		upstreamProtocol = ""
+		upstreamHeader = nil
+		upstreamPath = nil
+	}
+	if upstreamPath != nil && upstreamPath.UPathType == "" {
+		upstreamPath = nil
+	}
+	result := &RouteRequest{
+		ID:               o.Id,
+		Desc:             o.Desc,
+		Priority:         o.Priority,
+		Methods:          o.Methods,
+		Uris:             o.Uris,
+		Hosts:            o.Hosts,
+		Redirect:         redirect,
+		Upstream:         o.Upstream,
+		UpstreamId:       o.UpstreamId,
+		RouteGroupId:     o.RouteGroupId,
+		UpstreamProtocol: upstreamProtocol,
+		UpstreamPath:     upstreamPath,
+		UpstreamHeader:   upstreamHeader,
+		Protocols:        protocols,
+		Vars:             requestVars,
+		Plugins:          requestPlugins,
+	}
+	return result, nil
 }
 
-func findRoute(c *gin.Context) {
-	rid := c.Param("rid")
-	route := &service.Route{}
-	var count int
-	if err := conf.DB().Table("routes").Where("id=?", rid).Count(&count).First(&route).Error; err != nil {
-		e := errno.FromMessage(errno.RouteRequestError, err.Error()+" route ID: "+rid)
-		logger.Error(e.Msg)
-		c.AbortWithStatusJSON(http.StatusInternalServerError, e.Response())
-		return
-	} else {
-		if count < 1 {
-			e := errno.FromMessage(errno.RouteRequestError, " route ID: "+rid+" not exist")
-			logger.Error(e.Msg)
-			c.AbortWithStatusJSON(e.Status, e.Response())
-			return
-		}
-	}
-	if !route.Status {
-		routeRequest := &service.RouteRequest{}
-		if err := json.Unmarshal([]byte(route.Content), &routeRequest); err != nil {
-			e := errno.FromMessage(errno.RouteRequestError, " route ID: "+rid+" not exist")
-			logger.Error(e.Msg)
-			c.AbortWithStatusJSON(e.Status, e.Response())
-			return
-		} else {
-			routeRequest.Name = route.Name
-			resp, _ := json.Marshal(routeRequest)
-			c.Data(http.StatusOK, service.ContentType, resp)
-		}
-	} else {
-		// find from apisix
-		request := &service.ApisixRouteRequest{}
-		if response, err := request.FindById(rid); err != nil {
-			e := errno.FromMessage(errno.RouteRequestError, err.Error()+" route ID: "+rid)
-			logger.Error(e.Msg)
-			c.AbortWithStatusJSON(http.StatusBadRequest, e.Response())
-			return
-		} else {
-			// transfer response to dashboard struct
-			if result, err := response.Parse(); err != nil {
-				e := errno.FromMessage(errno.RouteRequestError, err.Error()+" route ID: "+rid)
-				logger.Error(e.Msg)
-				c.AbortWithStatusJSON(http.StatusBadRequest, e.Response())
-				return
-			} else {
-				// need to find name from mysql temporary
-				result.Name = route.Name
-				var script map[string]interface{}
-				if err = json.Unmarshal([]byte(route.Script), &script); err != nil {
-					script = map[string]interface{}{}
-				}
-				result.Script = script
-
-				result.RouteGroupId = route.RouteGroupId
-				result.RouteGroupName = route.RouteGroupName
-				result.Status = true
-				resp, _ := json.Marshal(result)
-				c.Data(http.StatusOK, service.ContentType, resp)
-			}
-		}
-	}
+type Redirect struct {
+	HttpToHttps bool   `json:"http_to_https,omitempty"`
+	Code        int64  `json:"code,omitempty"`
+	Uri         string `json:"uri,omitempty"`
 }
 
-func getRouteWithApisixUrl(c *gin.Context) {
-	rid := c.Param("rid")
-	var count int
-	if err := conf.DB().Table("routes").Where("id=?", rid).Count(&count).Error; err != nil {
-		e := errno.FromMessage(errno.RouteRequestError, err.Error()+" route ID: "+rid)
-		logger.Error(e.Msg)
-		c.AbortWithStatusJSON(http.StatusInternalServerError, e.Response())
-		return
-	} else {
-		if count < 1 {
-			e := errno.FromMessage(errno.RouteRequestError, " route ID: "+rid+" not exist")
-			logger.Error(e.Msg)
-			c.AbortWithStatusJSON(e.Status, e.Response())
-			return
-		}
+type ProxyRewrite struct {
+	Uri      string            `json:"uri"`
+	RegexUri []string          `json:"regex_uri"`
+	Scheme   string            `json:"scheme"`
+	Host     string            `json:"host"`
+	Headers  map[string]string `json:"headers"`
+}
+
+func (r ProxyRewrite) MarshalJSON() ([]byte, error) {
+	m := make(map[string]interface{})
+	if r.RegexUri != nil {
+		m["regex_uri"] = r.RegexUri
 	}
-	// find from apisix
-	request := &service.ApisixRouteRequest{}
-	if response, err := request.FindById(rid); err != nil {
-		e := errno.FromMessage(errno.RouteRequestError, err.Error()+" route ID: "+rid)
-		logger.Error(e.Msg)
-		c.AbortWithStatusJSON(http.StatusBadRequest, e.Response())
-		return
+	if r.Uri != "" {
+		m["uri"] = r.Uri
+	}
+	if r.Scheme != UPATHTYPE_KEEP && r.Scheme != "" {
+		m["scheme"] = r.Scheme
+	}
+	if r.Host != "" {
+		m["host"] = r.Host
+	}
+	if r.Headers != nil && len(r.Headers) > 0 {
+		m["headers"] = r.Headers
+	}
+	if result, err := json.Marshal(m); err != nil {
+		return nil, err
 	} else {
-		// transfer response to dashboard struct
-		if result, err := response.Parse(); err != nil {
-			e := errno.FromMessage(errno.RouteRequestError, err.Error()+" route ID: "+rid)
-			logger.Error(e.Msg)
-			c.AbortWithStatusJSON(http.StatusBadRequest, e.Response())
-			return
-		} else {
-			// need to find name from mysql temporary
-			route := &service.Route{}
-			if err := conf.DB().Table("routes").Where("id=?", rid).First(&route).Error; err != nil {
-				e := errno.FromMessage(errno.RouteRequestError, err.Error()+" route ID: "+rid)
-				logger.Error(e.Msg)
-				c.AbortWithStatusJSON(http.StatusBadRequest, e.Response())
-				return
-			}
-			result.Name = route.Name
-			url := conf.DebugUrl
-			reg, _ := regexp.Compile("://([^/:]+)(:\\d*)?")
-			res := reg.FindSubmatch([]byte(url))
-			var addr string
-			if len(res) > 0 {
-				addr = string(res[0])
-				addr = strings.Replace(addr, "://", "", 1)
-			}
-			routeResponse := &service.RouteResponseWithUrl{}
-			routeResponse.Url = addr
-			routeResponse.RouteRequest = *result
-			resp, _ := json.Marshal(routeResponse)
-			c.Data(http.StatusOK, service.ContentType, resp)
-		}
+		return result, nil
 	}
 }
 
-func createRoute(c *gin.Context) {
-	u4 := uuid.NewV4()
-	rid := u4.String()
-	param, exist := c.Get("requestBody")
-	if !exist || len(param.([]byte)) < 1 {
-		e := errno.FromMessage(errno.RouteRequestError, "route create with no post data")
-		logger.Error(e.Msg)
-		c.AbortWithStatusJSON(http.StatusBadRequest, e.Response())
-		return
+func (r Redirect) MarshalJSON() ([]byte, error) {
+	m := make(map[string]interface{})
+	if r.HttpToHttps {
+		m["http_to_https"] = true
+	} else if r.Uri != "" {
+		m["code"] = r.Code
+		m["uri"] = r.Uri
 	}
-	routeRequest := &service.RouteRequest{}
-	if err := routeRequest.Parse(param); err != nil {
-		e := errno.FromMessage(errno.RouteRequestError, err.Error())
-		logger.Error(e.Msg)
-		c.AbortWithStatusJSON(http.StatusBadRequest, e.Response())
-		return
+	if result, err := json.Marshal(m); err != nil {
+		return nil, err
+	} else {
+		return result, nil
 	}
-	routeGroup := &service.RouteGroupDao{}
-	isCreateGroup := false
-	if len(strings.Trim(routeRequest.RouteGroupId, "")) == 0 {
-		// create route group
-		if len(strings.Trim(routeRequest.RouteGroupName, "")) > 0 {
-			isCreateGroup = true
-			routeGroup.ID = uuid.NewV4()
-			routeGroup.Name = routeRequest.RouteGroupName
-			routeRequest.RouteGroupId = routeGroup.ID.String()
+}
+
+type Upstream struct {
+	UType           string                 `json:"type"`
+	Nodes           map[string]int64       `json:"nodes"`
+	Timeout         UpstreamTimeout        `json:"timeout"`
+	EnableWebsocket bool                   `json:"enable_websocket"`
+	Checks          map[string]interface{} `json:"checks,omitempty"`
+	HashOn          string                 `json:"hash_on,omitempty"`
+	Key             string                 `json:"key,omitempty"`
+}
+
+type UpstreamTimeout struct {
+	Connect int64 `json:"connect"`
+	Send    int64 `json:"send"`
+	Read    int64 `json:"read"`
+}
+
+type UpstreamPath struct {
+	UPathType string `json:"type"`
+	From      string `json:"from"`
+	To        string `json:"to"`
+}
+
+type ApisixRouteRequest struct {
+	Desc            string                 `json:"desc,omitempty"`
+	Priority        int64                  `json:"priority"`
+	Methods         []string               `json:"methods,omitempty"`
+	Uris            []string               `json:"uris,omitempty"`
+	Hosts           []string               `json:"hosts,omitempty"`
+	Vars            [][]string             `json:"vars,omitempty"`
+	Upstream        *Upstream              `json:"upstream,omitempty"`
+	UpstreamId      string                 `json:"upstream_id,omitempty"`
+	ServiceProtocol string                 `json:"service_protocol"`
+	Plugins         map[string]interface{} `json:"plugins,omitempty"`
+	Script          string                 `json:"script,omitempty"`
+	//Name     string                 `json:"name"`
+}
+
+// ApisixRouteResponse is response from apisix admin api
+type ApisixRouteResponse struct {
+	Action string `json:"action"`
+	Node   *Node  `json:"node"`
+}
+
+type Node struct {
+	Value         Value  `json:"value"`
+	ModifiedIndex uint64 `json:"modifiedIndex"`
+}
+
+type Value struct {
+	Id             string                 `json:"id"`
+	Name           string                 `json:"name"`
+	Desc           string                 `json:"desc,omitempty"`
+	Priority       int64                  `json:"priority"`
+	Methods        []string               `json:"methods"`
+	Uris           []string               `json:"uris"`
+	Hosts          []string               `json:"hosts"`
+	Vars           [][]string             `json:"vars"`
+	Upstream       *Upstream              `json:"upstream,omitempty"`
+	UpstreamId     string                 `json:"upstream_id,omitempty"`
+	Plugins        map[string]interface{} `json:"plugins"`
+	RouteGroupId   string                 `json:"route_group_id"`
+	RouteGroupName string                 `json:"route_group_name"`
+	Status         bool                   `json:"status"`
+}
+
+type Route struct {
+	Base
+	Name            string `json:"name"`
+	Description     string `json:"description,omitempty"`
+	Hosts           string `json:"hosts"`
+	Uris            string `json:"uris"`
+	UpstreamNodes   string `json:"upstream_nodes"`
+	UpstreamId      string `json:"upstream_id"`
+	Priority        int64  `json:"priority"`
+	Content         string `json:"content"`
+	Script          string `json:"script"`
+	ContentAdminApi string `json:"content_admin_api"`
+	RouteGroupId    string `json:"route_group_id"`
+	RouteGroupName  string `json:"route_group_name"`
+	Status          bool   `json:"status"`
+}
+
+type RouteResponse struct {
+	Base
+	Name           string    `json:"name"`
+	Description    string    `json:"description,omitempty"`
+	Hosts          []string  `json:"hosts,omitempty"`
+	Uris           []string  `json:"uris,omitempty"`
+	Upstream       *Upstream `json:"upstream,omitempty"`
+	UpstreamId     string    `json:"upstream_id,omitempty"`
+	Priority       int64     `json:"priority"`
+	RouteGroupId   string    `json:"route_group_id"`
+	RouteGroupName string    `json:"route_group_name"`
+	Status         bool      `json:"status"`
+}
+
+type RouteResponseWithUrl struct {
+	RouteRequest
+	Url string `json:"url"`
+}
+
+type ListResponse struct {
+	Count int         `json:"count"`
+	Data  interface{} `json:"data"`
+}
+
+func (rr *RouteResponse) Parse(r *Route) {
+	rr.Base = r.Base
+	rr.Name = r.Name
+	rr.Description = r.Description
+	rr.UpstreamId = r.UpstreamId
+	rr.Priority = r.Priority
+	rr.RouteGroupId = r.RouteGroupId
+	rr.RouteGroupName = r.RouteGroupName
+	rr.Status = r.Status
+	// hosts
+	if len(r.Hosts) > 0 {
+		var hosts []string
+		if err := json.Unmarshal([]byte(r.Hosts), &hosts); err == nil {
+			rr.Hosts = hosts
+		} else {
+			logger.Error(err.Error())
 		}
 	}
+
+	// uris
+	if len(r.Uris) > 0 {
+		var uris []string
+		if err := json.Unmarshal([]byte(r.Uris), &uris); err == nil {
+			rr.Uris = uris
+		}
+	}
+
+	// uris
+	var resp ApisixRouteResponse
+	if err := json.Unmarshal([]byte(r.ContentAdminApi), &resp); err == nil {
+		rr.Upstream = resp.Node.Value.Upstream
+	}
+}
+
+// RouteRequest -> ApisixRouteRequest
+func ToApisixRequest(routeRequest *RouteRequest) *ApisixRouteRequest {
+	// redirect -> plugins
+	plugins := utils.CopyMap(routeRequest.Plugins)
+	redirect := routeRequest.Redirect
+	if redirect != nil {
+		plugins["redirect"] = redirect
+	}
+
 	logger.Info(routeRequest.Plugins)
-	db := conf.DB()
-	arr := service.ToApisixRequest(routeRequest)
-	var resp *service.ApisixRouteResponse
-	var r *service.Route
-	if rd, err := service.ToRoute(routeRequest, arr, u4, nil); err != nil {
-		c.AbortWithStatusJSON(http.StatusInternalServerError, err.Response())
-		return
-	} else {
-		r = rd
-		tx := db.Begin()
-		defer func() {
-			if r := recover(); r != nil {
-				tx.Rollback()
-			}
-		}()
-		logger.Info(rd)
-		if isCreateGroup {
-			if err := tx.Model(&service.RouteGroupDao{}).Create(routeGroup).Error; err != nil {
-				tx.Rollback()
-				e := errno.FromMessage(errno.DuplicateRouteGroupName, routeGroup.Name)
-				logger.Error(e.Msg)
-				c.AbortWithStatusJSON(http.StatusInternalServerError, e.Response())
-				return
-			}
+
+	// scheme https and not http -> vars ['scheme', '==', 'https']
+	pMap := utils.Set2Map(routeRequest.Protocols)
+
+	arr := &ApisixRouteRequest{}
+	arr.Parse(routeRequest)
+
+	// protocols[websokect] -> upstream
+	if pMap[WEBSOCKET] == 1 && arr.Upstream != nil {
+		arr.Upstream.EnableWebsocket = true
+	}
+	vars := utils.CopyStrings(routeRequest.Vars)
+	if pMap[HTTP] != 1 || pMap[HTTPS] != 1 {
+		if pMap[HTTP] == 1 {
+			vars = append(vars, []string{SCHEME, "==", HTTP})
 		}
-		if err := tx.Model(&service.Route{}).Create(rd).Error; err != nil {
-			// rollback
-			tx.Rollback()
-			e := errno.FromMessage(errno.DBRouteCreateError, err.Error())
-			logger.Error(e.Msg)
-			c.AbortWithStatusJSON(http.StatusInternalServerError, e.Response())
-			return
-		} else if rd.Status {
-			if resp, err = arr.Create(rid); err != nil {
-				tx.Rollback()
-				if httpError, ok := err.(*errno.HttpError); ok {
-					c.AbortWithStatusJSON(httpError.Code, httpError.Msg)
-					return
-				} else {
-					e := errno.FromMessage(errno.ApisixRouteCreateError, err.Error())
-					logger.Error(e.Msg)
-					c.AbortWithStatusJSON(http.StatusInternalServerError, e.Response())
-					return
-				}
-			}
-		}
-		if err := tx.Commit().Error; err == nil && r.Status {
-			// update content_admin_api
-			if rd, err := service.ToRoute(routeRequest, arr, u4, resp); err != nil {
-				e := errno.FromMessage(errno.DBRouteUpdateError, err.Error())
-				logger.Error(e.Msg)
-			} else {
-				if err := conf.DB().Model(&service.Route{}).Update(rd).Error; err != nil {
-					e := errno.FromMessage(errno.DBRouteUpdateError, err.Error())
-					logger.Error(e.Msg)
-				}
-			}
+		if pMap[HTTPS] == 1 {
+			vars = append(vars, []string{SCHEME, "==", HTTPS})
 		}
 	}
-	c.Data(http.StatusOK, service.ContentType, errno.Success())
+	if len(vars) > 0 {
+		arr.Vars = vars
+	} else {
+		arr.Vars = nil
+	}
+	// upstreamId
+	arr.UpstreamId = routeRequest.UpstreamId
+	// upstream protocol
+	if arr.Upstream != nil || arr.UpstreamId != "" {
+		pr := &ProxyRewrite{}
+		pr.Scheme = routeRequest.UpstreamProtocol
+		// upstream path
+		proxyPath := routeRequest.UpstreamPath
+		if proxyPath != nil {
+			if proxyPath.UPathType == UPATHTYPE_STATIC || proxyPath.UPathType == "" {
+				pr.Uri = proxyPath.To
+				pr.RegexUri = nil
+			} else {
+				pr.RegexUri = []string{proxyPath.From, proxyPath.To}
+			}
+		}
+		// upstream headers
+		pr.Headers = routeRequest.UpstreamHeader
+		if proxyPath != nil || pr.Scheme != UPATHTYPE_KEEP || (pr.Headers != nil && len(pr.Headers) > 0) {
+			plugins[PROXY_REWRIETE] = pr
+		}
+	}
+
+	if plugins != nil && len(plugins) > 0 {
+		arr.Plugins = plugins
+		for key, _ := range plugins {
+			if key == "grpc-transformation" {
+				arr.ServiceProtocol = "grpc"
+				break
+			}
+		}
+	} else {
+		arr.Plugins = nil
+	}
+
+	if routeRequest.Script != nil {
+		arr.Script, _ = generateLuaCode(routeRequest.Script)
+	}
+
+	return arr
+}
+
+func generateLuaCode(script map[string]interface{}) (string, error) {
+	scriptString, err := json.Marshal(script)
+	if err != nil {
+		return "", err
+	}
+
+	cmd := exec.Command("sh", "-c",
+		"cd /go/manager-api/dag-to-lua/ && lua cli.lua "+
+			"'"+string(scriptString)+"'")
+
+	logger.Info("generate conf:", string(scriptString))
+
+	stdout, _ := cmd.StdoutPipe()
+	defer stdout.Close()
+	if err := cmd.Start(); err != nil {
+		logger.Info("generate err:", err)
+		return "", err
+	}
+
+	result, _ := ioutil.ReadAll(stdout)
+	resData := string(result)
+
+	logger.Info("generated code:", resData)
+
+	return resData, nil
+}
+
+func ToRoute(routeRequest *RouteRequest,
+	arr *ApisixRouteRequest,
+	u4 uuid.UUID,
+	resp *ApisixRouteResponse) (*Route, *errno.ManagerError) {
+	rd := &Route{}
+	if err := rd.Parse(routeRequest, arr); err != nil {
+		e := errno.FromMessage(errno.DBRouteCreateError, err.Error())
+		return nil, e
+	}
+	if rd.Name == "" {
+		rd.Name = routeRequest.Name
+	}
+	rd.ID = u4
+	// content_admin_api
+	if resp != nil {
+		resp.Node.Value.RouteGroupId = rd.RouteGroupId
+		resp.Node.Value.Status = rd.Status
+		if respStr, err := json.Marshal(resp); err != nil {
+			e := errno.FromMessage(errno.DBRouteCreateError, err.Error())
+			return nil, e
+		} else {
+			rd.ContentAdminApi = string(respStr)
+		}
+	}
+	// hosts
+	hosts := routeRequest.Hosts
+	if hb, err := json.Marshal(hosts); err != nil {
+		e := errno.FromMessage(errno.DBRouteCreateError, err.Error())
+		logger.Warn(e.Msg)
+	} else {
+		rd.Hosts = string(hb)
+	}
+	// uris
+	uris := routeRequest.Uris
+	if ub, err := json.Marshal(uris); err != nil {
+		e := errno.FromMessage(errno.DBRouteCreateError, err.Error())
+		logger.Warn(e.Msg)
+	} else {
+		rd.Uris = string(ub)
+	}
+	// upstreamNodes
+	if routeRequest.Upstream != nil {
+		nodes := routeRequest.Upstream.Nodes
+		ips := make([]string, 0)
+		for k, _ := range nodes {
+			ips = append(ips, k)
+		}
+		if nb, err := json.Marshal(ips); err != nil {
+			e := errno.FromMessage(errno.DBRouteCreateError, err.Error())
+			logger.Warn(e.Msg)
+		} else {
+			rd.UpstreamNodes = string(nb)
+		}
+	}
+	// upstreamId
+	rd.UpstreamId = arr.UpstreamId
+	return rd, nil
 }
