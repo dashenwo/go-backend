@@ -4,7 +4,6 @@ import (
 	conf "github.com/dashenwo/go-backend/v2/console/account/config"
 	"github.com/dashenwo/go-backend/v2/console/account/handler"
 	"github.com/dashenwo/go-backend/v2/console/account/registry"
-	"github.com/dashenwo/go-backend/v2/console/account/wrapper/header"
 	tracer "github.com/dashenwo/go-backend/v2/pkg/opentracing"
 	"github.com/dashenwo/plugins/logger/zap/v2"
 	"github.com/micro/cli/v2"
