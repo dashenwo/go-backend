@@ -7,9 +7,13 @@ import (
 	"github.com/dashenwo/go-backend/v2/console/account/global"
 	"github.com/dashenwo/go-backend/v2/console/account/internal/service"
 	"github.com/dashenwo/go-backend/v2/console/account/proto"
+	"github.com/dashenwo/go-backend/v2/console/account/schema"
 	"github.com/dashenwo/go-backend/v2/pkg/crypto"
+	"github.com/dashenwo/go-backend/v2/pkg/utils/header"
+	"github.com/dashenwo/go-backend/v2/pkg/utils/jwt"
+	"github.com/dashenwo/go-backend/v2/pkg/utils/response/code"
+	"github.com/dashenwo/go-backend/v2/pkg/utils/response/message"
 	"github.com/dashenwo/go-backend/v2/pkg/utils/validate"
-	"github.com/fatih/structs"
 	"github.com/micro/go-micro/v2/errors"
 	"github.com/micro/go-micro/v2/util/log"
 	"google.golang.org/grpc"
@@ -40,7 +44,7 @@ func (a *Account) Login(ctx context.Context, req *proto.LoginRequest, res *proto
 		return err
 	}
 	// 保存session
-	if err = a.saveSession(ctx, structs.Map(user), user.ID, req.Source); err != nil {
+	if err = a.saveSession(ctx, user, req.Source); err != nil {
 		return errors.New(conf.AppId, err.Error(), 506)
 	}
 	return nil
@@ -64,6 +68,18 @@ func (a *Account) Register(ctx context.Context, req *proto.RegisterRequest, res 
 
 // 查询信息
 func (a *Account) Info(ctx context.Context, req *proto.InfoRequest, res *proto.InfoResponse) error {
+	headers := header.GetHeader(ctx)
+	if req.Id == "" && headers.Get("Token") == "" {
+		return errors.New(conf.AppId, message.ParameterErrorCode, code.ParameterErrorCode)
+	}
+	if req.Id == "" {
+		data, err := jwt.Decode(headers.Get("Token"), global.Config.Session.Secret)
+		if err != nil {
+			return errors.New(conf.AppId, message.ParameterJwtErrorCode, code.ParameterJwtErrorCode)
+		}
+		req.Id = data.Id
+	}
+
 	return nil
 }
 func (a *Account) Update(ctx context.Context, req *proto.UpdateRequest, res *proto.UpdateResponse) error {
@@ -71,9 +87,9 @@ func (a *Account) Update(ctx context.Context, req *proto.UpdateRequest, res *pro
 }
 
 // 保存session
-func (a *Account) saveSession(ctx context.Context, data map[string]interface{}, userId, source string) error {
+func (a *Account) saveSession(ctx context.Context, data *schema.Account, source string) error {
 	if data == nil {
-		data = make(map[string]interface{})
+		data = &schema.Account{}
 	}
 	var (
 		maxAge    = global.Config.Session.Expire
@@ -87,34 +103,43 @@ func (a *Account) saveSession(ctx context.Context, data map[string]interface{}, 
 	case "ios":
 		maxAge = 3600 * 24 * 30
 	}
-	jwtData, err = crypto.CreateToken(userId, global.Config.Session.Secret, maxAge)
+	claims := jwt.LoginClaims{
+		Id:        data.ID,
+		NickName:  data.Nickname,
+		LiftTime:  maxAge,
+		LoginTime: time.Now().Unix(),
+	}
+	jwtData, err = jwt.Encode(claims, global.Config.Session.Secret)
 	if err != nil {
 		return err
 	}
 	token := crypto.Md5(jwtData)
-	data["token"] = token
-	data["jwt"] = jwtData
-	data["max_age"] = maxAge
-	key := global.Config.Session.Prefix + ":" + token
+	insertData := make(map[string]interface{})
+	insertData["token"] = token
+	insertData["jwt"] = jwtData
+	insertData["max_age"] = maxAge
+	key := global.Config.Session.Prefix + ":" + data.ID + ":" + token
 	// 序列化数据
-	if insetByte, err = json.Marshal(data); err != nil {
+	if insetByte, err = json.Marshal(insertData); err != nil {
 		return err
 	}
+	// base64加密
 	insetStr := crypto.Base64Encode(insetByte)
 	// 插入redis
 	if err = global.Redis.Set(global.Redis.Context(), key, insetStr, time.Duration(maxAge)*time.Second).Err(); err != nil {
 		return err
 	}
 	// 发送header
+	sessionId := crypto.Base64Encode([]byte(token + "|" + data.ID))
 	sessionCookie := &http.Cookie{
 		Name:    global.Config.Session.Name,
 		Path:    "/",
-		Value:   token,
+		Value:   sessionId,
 		Expires: time.Now().Add(time.Duration(maxAge) * time.Second),
 	}
-	header := metadata.Pairs(
+	headers := metadata.Pairs(
 		"Set-Cookie", sessionCookie.String(),
 	)
-	_ = grpc.SendHeader(ctx, header)
+	_ = grpc.SendHeader(ctx, headers)
 	return nil
 }

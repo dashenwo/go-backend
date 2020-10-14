@@ -16,7 +16,7 @@ elasticsearch:
     UserName: ""
     PassWord: ""
 session:
-  prefix: "session"
+  prefix: "sessions"
   name: "session_id"
   expire: 3600
   secret: "idmfdDh44qCQL8z6rVBnuAe91gk0oW5l"
