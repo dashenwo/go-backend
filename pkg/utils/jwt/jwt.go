@@ -3,7 +3,6 @@ package jwt
 import (
 	"errors"
 	"github.com/dgrijalva/jwt-go"
-	"github.com/micro/go-micro/v2/util/log"
 )
 
 type LoginClaims struct {
@@ -41,7 +40,6 @@ func Decode(tokenStr string, secret string) (*LoginClaims, error) {
 		return nil, err
 	}
 	if claims, ok := token.Claims.(*LoginClaims); ok && token.Valid {
-		log.Infof("uid: %s, role: %v", claims.Id, claims.Role)
 		return claims, nil
 	}
 	return nil, err
