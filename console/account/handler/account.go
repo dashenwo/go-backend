@@ -93,6 +93,8 @@ func (a *Account) saveSession(ctx context.Context, data map[string]interface{}, 
 	}
 	token := crypto.Md5(jwtData)
 	data["token"] = token
+	data["jwt"] = jwtData
+	data["max_age"] = maxAge
 	key := global.Config.Session.Prefix + ":" + token
 	// 序列化数据
 	if insetByte, err = json.Marshal(data); err != nil {
