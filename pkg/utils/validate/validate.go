@@ -1,6 +1,7 @@
 package validate
 
 import (
+	"github.com/dashenwo/go-backend/v2/pkg/utils/response/code"
 	"github.com/go-playground/locales/zh"
 	ut "github.com/go-playground/universal-translator"
 	"github.com/go-playground/validator/v10"
@@ -63,7 +64,7 @@ func Validate(entity interface{}, appId string) error {
 			if msg == "" {
 				msg = err.Translate(trans)
 			}
-			return errors.New(appId, msg, 401)
+			return errors.New(appId, msg, code.ParameterErrorCode)
 		}
 	}
 	return nil
