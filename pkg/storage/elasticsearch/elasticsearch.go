@@ -1,7 +1,6 @@
 package elasticsearch
 
 import (
-	"github.com/micro/go-micro/v2/config"
 	"github.com/micro/go-micro/v2/util/log"
 	"github.com/olivere/elastic/v7"
 	"sync"
@@ -26,10 +25,8 @@ type basicAuth struct {
 	PassWord string //密码
 }
 
-func Init() (*elastic.Client, error) {
+func Init(conf Elasticsearch) (*elastic.Client, error) {
 	once.Do(func() {
-		conf = Elasticsearch{}
-		err = config.Get("elasticsearch").Scan(&conf)
 		if err != nil {
 			log.Fatal(err)
 		}

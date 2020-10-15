@@ -14,11 +14,11 @@ import (
 
 func NewContainer() (*dig.Container, error) {
 	c := dig.New()
-	buildAccountUsecase(c)
+	buildProvide(c)
 	return c, nil
 }
 
-func buildAccountUsecase(c *dig.Container) {
+func buildProvide(c *dig.Container) {
 	var err error
 	// 初始化配置信息
 	if err := config.Scan(global.Config); err != nil {
@@ -27,7 +27,7 @@ func buildAccountUsecase(c *dig.Container) {
 	// DB初始化
 	gorm.InitDb()
 	// 初始化elasticsearch
-	if es, err := elasticsearch.Init(); err == nil {
+	if es, err := elasticsearch.Init(global.Config.Elasticsearch); err == nil {
 		global.Es = es
 	} else {
 		panic("初始化es失败")

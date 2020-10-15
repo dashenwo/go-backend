@@ -1,0 +1,87 @@
+syntax = "proto3";
+package com.dashenwo.srv.category;
+option go_package=".;proto";//可选项设置包的地址
+// 添加类别请求结构体
+message AddRequest{
+  //@inject_tag: validate:"required" message:"required:类别标题不能为空" json:"title"
+  string title = 1; // 类别名称
+  //@inject_tag: validate:"required" message:"required:类别链接地址不能为空" json:"url"
+  string url =2; //链接地址
+  //@inject_tag:  json:"tags"
+  repeated string tags = 3; //所包含的tag标签
+}
+
+// 添加类别返回结构体
+message AddResponse{
+  //@inject_tag:  json:"id"
+  string id = 1; //返回成功后的id
+}
+
+// 修改类别请求结构体
+message EditRequest{
+  //@inject_tag: validate:"required" message:"required:类别标题不能为空" json:"title"
+  string title = 1; // 类别名称
+  //@inject_tag: validate:"required" message:"required:类别链接地址不能为空" json:"url"
+  string url =2; //链接地址
+  //@inject_tag:  json:"tags"
+  repeated string tags = 3; //所包含的tag标签
+}
+
+// 修改类别返回结构体
+message EditResponse{
+  //@inject_tag:  json:"count"
+  int64 count = 1; //返回成功后的id
+}
+
+//删除类别请求结构体
+message DeleteRequest{
+  //@inject_tag: validate:"required" message:"required:类别标题不能为空" json:"ids"
+  repeated string ids = 1; //要删除的数据
+}
+//删除类别返回结构体
+message DeleteResponse{
+
+}
+
+//查询类别请求结构体
+message QueryRequest{
+
+}
+//查询类别返回结构体
+message QueryResponse{
+  message Category{
+    //@inject_tag: json:"id"
+    string id = 1; //物理id
+    //@inject_tag: json:"title"
+    string title = 2; //标题
+    //@inject_tag: json:"url"
+    string url = 3; //url
+    //@inject_tag: json:"url,omitempty"
+    repeated string tags = 4; //包含的子标签
+    //@inject_tag: json:"sort"
+    string sort = 5;
+    //@inject_tag: json:"created_time"
+    string created_time = 6;
+    //@inject_tag: json:"updated_time"
+    string updated_time = 7;
+  }
+  repeated Category List=1;
+}
+
+message PageInfo{
+  //@inject_tag: json:"size"
+  int32 Size = 1; //每页显示数量
+  //@inject_tag: json:"page"
+  int32 Page = 2; //当前页
+  //@inject_tag: json:"total_page"
+  int32 TotalPage = 3; //总页数
+  //@inject_tag: json:"total_count"
+  int32 TotalCount = 4; //总条数
+}
+
+service Category{
+    rpc Query(QueryRequest) returns (QueryResponse);
+    rpc Add(AddRequest) returns (AddResponse);
+    rpc Edit(EditRequest) returns (EditResponse);
+    rpc Delete(DeleteRequest) returns(DeleteResponse);
+}
