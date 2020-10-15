@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	conf "github.com/dashenwo/go-backend/v2/console/account/config"
+	"github.com/dashenwo/go-backend/v2/console/account/global"
 	"github.com/dashenwo/go-backend/v2/console/account/internal/model"
 	"github.com/dashenwo/go-backend/v2/console/account/internal/repository"
 	"github.com/dashenwo/go-backend/v2/console/account/schema"
@@ -10,7 +11,6 @@ import (
 	"github.com/dashenwo/go-backend/v2/pkg/crypto"
 	"github.com/dashenwo/go-backend/v2/pkg/utils/generate"
 	"github.com/jinzhu/copier"
-	"github.com/micro/go-micro/v2"
 	"github.com/micro/go-micro/v2/errors"
 	"strconv"
 	"time"
@@ -48,15 +48,13 @@ func (s AccountService) Login(username string, password string) (*schema.Account
 // 注册方法
 func (s AccountService) Register(nickname, password, recipient, code string) (*schema.Account, error) {
 	//1.验证验证码是否正确
-	service := micro.NewService()
-	service.Init()
-	srv := proto.NewCaptchaService("com.dashenwo.srv.captcha", service.Client())
+	srv := proto.NewCaptchaService("com.dashenwo.srv.captcha", global.ReqClient)
 	_, err := srv.Verify(context.Background(), &proto.VerifyRequest{Recipient: recipient, Code: code, Type: 2})
 	if err != nil {
 		return nil, err
 	}
 	//2.调用id
-	rsp, callErr := generate.GetSnowflakeId()
+	rsp, callErr := generate.GetSnowflakeId(global.ReqClient)
 	if callErr != nil {
 		return nil, callErr
 	}

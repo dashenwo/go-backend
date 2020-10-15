@@ -2,6 +2,7 @@ package main
 
 import (
 	conf "github.com/dashenwo/go-backend/v2/console/captcha/config"
+	"github.com/dashenwo/go-backend/v2/console/captcha/global"
 	"github.com/dashenwo/go-backend/v2/console/captcha/handler"
 	"github.com/dashenwo/go-backend/v2/console/captcha/registry"
 	tracer "github.com/dashenwo/go-backend/v2/pkg/opentracing"
@@ -73,6 +74,9 @@ func main() {
 	)
 	// 初始化服务
 	service.Init()
+
+	// 设置客户端
+	global.ReqClient = service.Client()
 
 	c, err := registry.NewContainer()
 	if err != nil {

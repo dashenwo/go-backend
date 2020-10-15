@@ -3,19 +3,16 @@ package generate
 import (
 	"context"
 	"github.com/dashenwo/go-backend/v2/console/snowflake/proto"
-	"github.com/micro/go-micro/v2"
-	"github.com/micro/go-micro/v2/errors"
+	"github.com/micro/go-micro/v2/client"
 )
 
-func GetSnowflakeId() (*proto.Response, error) {
-	service := micro.NewService()
-	service.Init()
+func GetSnowflakeId(client client.Client) (*proto.Response, error) {
 	// create the proto client for helloworld
-	srv := proto.NewSnowflakeService("com.dashenwo.srv.snowflake", service.Client())
+	srv := proto.NewSnowflakeService("com.dashenwo.srv.snowflake", client)
 	// call an endpoint on the service
 	rsp, callErr := srv.Generate(context.Background(), &proto.Request{})
 	if callErr != nil {
-		return nil, errors.New("com.dashenwo.srv.snowflake", callErr.Error(), 506)
+		return nil, callErr
 	}
 	return rsp, nil
 }

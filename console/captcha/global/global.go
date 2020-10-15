@@ -7,6 +7,6 @@ import (
 
 var (
 	// elasticsearch客户端
-	RequestClient client.Client
-	Kafka         sarama.SyncProducer
+	ReqClient client.Client
+	Kafka     sarama.SyncProducer
 )

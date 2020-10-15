@@ -34,7 +34,7 @@ func NewCaptchaService(repo repository.CaptchaRepository) *CaptchaService {
 // 生成验证码并发送
 func (s CaptchaService) Generate(recipient string, recipientType int32) (*schema.Captcha, error) {
 	code := fmt.Sprintf("%06v", rand.New(rand.NewSource(time.Now().UnixNano())).Int31n(1000000))
-	rsp, err := generate.GetSnowflakeId()
+	rsp, err := generate.GetSnowflakeId(global.RequestClient)
 	if err != nil {
 		return nil, err
 	}

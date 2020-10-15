@@ -8,7 +8,7 @@ import (
 
 var (
 	// elasticsearch客户端
-	Es            *elastic.Client
-	Redis         redis.UniversalClient
-	RequestClient client.Client
+	Es        *elastic.Client
+	Redis     redis.UniversalClient
+	ReqClient client.Client
 )

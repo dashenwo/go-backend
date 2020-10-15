@@ -42,8 +42,9 @@ func NewCategoryEndpoints() []*api.Endpoint {
 // Client API for Category service
 
 type CategoryService interface {
+	Get(ctx context.Context, in *QueryOneRequest, opts ...client.CallOption) (*CategorySchema, error)
 	Query(ctx context.Context, in *QueryRequest, opts ...client.CallOption) (*QueryResponse, error)
-	Add(ctx context.Context, in *AddRequest, opts ...client.CallOption) (*AddResponse, error)
+	Create(ctx context.Context, in *AddRequest, opts ...client.CallOption) (*AddResponse, error)
 	Edit(ctx context.Context, in *EditRequest, opts ...client.CallOption) (*EditResponse, error)
 	Delete(ctx context.Context, in *DeleteRequest, opts ...client.CallOption) (*DeleteResponse, error)
 }
@@ -60,6 +61,16 @@ func NewCategoryService(name string, c client.Client) CategoryService {
 	}
 }
 
+func (c *categoryService) Get(ctx context.Context, in *QueryOneRequest, opts ...client.CallOption) (*CategorySchema, error) {
+	req := c.c.NewRequest(c.name, "Category.Get", in)
+	out := new(CategorySchema)
+	err := c.c.Call(ctx, req, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *categoryService) Query(ctx context.Context, in *QueryRequest, opts ...client.CallOption) (*QueryResponse, error) {
 	req := c.c.NewRequest(c.name, "Category.Query", in)
 	out := new(QueryResponse)
@@ -70,8 +81,8 @@ func (c *categoryService) Query(ctx context.Context, in *QueryRequest, opts ...c
 	return out, nil
 }
 
-func (c *categoryService) Add(ctx context.Context, in *AddRequest, opts ...client.CallOption) (*AddResponse, error) {
-	req := c.c.NewRequest(c.name, "Category.Add", in)
+func (c *categoryService) Create(ctx context.Context, in *AddRequest, opts ...client.CallOption) (*AddResponse, error) {
+	req := c.c.NewRequest(c.name, "Category.Create", in)
 	out := new(AddResponse)
 	err := c.c.Call(ctx, req, out, opts...)
 	if err != nil {
@@ -103,16 +114,18 @@ func (c *categoryService) Delete(ctx context.Context, in *DeleteRequest, opts ..
 // Server API for Category service
 
 type CategoryHandler interface {
+	Get(context.Context, *QueryOneRequest, *CategorySchema) error
 	Query(context.Context, *QueryRequest, *QueryResponse) error
-	Add(context.Context, *AddRequest, *AddResponse) error
+	Create(context.Context, *AddRequest, *AddResponse) error
 	Edit(context.Context, *EditRequest, *EditResponse) error
 	Delete(context.Context, *DeleteRequest, *DeleteResponse) error
 }
 
 func RegisterCategoryHandler(s server.Server, hdlr CategoryHandler, opts ...server.HandlerOption) error {
 	type category interface {
+		Get(ctx context.Context, in *QueryOneRequest, out *CategorySchema) error
 		Query(ctx context.Context, in *QueryRequest, out *QueryResponse) error
-		Add(ctx context.Context, in *AddRequest, out *AddResponse) error
+		Create(ctx context.Context, in *AddRequest, out *AddResponse) error
 		Edit(ctx context.Context, in *EditRequest, out *EditResponse) error
 		Delete(ctx context.Context, in *DeleteRequest, out *DeleteResponse) error
 	}
@@ -127,12 +140,16 @@ type categoryHandler struct {
 	CategoryHandler
 }
 
+func (h *categoryHandler) Get(ctx context.Context, in *QueryOneRequest, out *CategorySchema) error {
+	return h.CategoryHandler.Get(ctx, in, out)
+}
+
 func (h *categoryHandler) Query(ctx context.Context, in *QueryRequest, out *QueryResponse) error {
 	return h.CategoryHandler.Query(ctx, in, out)
 }
 
-func (h *categoryHandler) Add(ctx context.Context, in *AddRequest, out *AddResponse) error {
-	return h.CategoryHandler.Add(ctx, in, out)
+func (h *categoryHandler) Create(ctx context.Context, in *AddRequest, out *AddResponse) error {
+	return h.CategoryHandler.Create(ctx, in, out)
 }
 
 func (h *categoryHandler) Edit(ctx context.Context, in *EditRequest, out *EditResponse) error {

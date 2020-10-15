@@ -76,6 +76,9 @@ func main() {
 	// 初始化服务
 	service.Init()
 
+	// 设置grpc客户端
+	global.ReqClient = service.Client()
+
 	c, err := registry.NewContainer()
 	if err != nil {
 		panic(fmt.Sprintf("failed to build container: %v", err))

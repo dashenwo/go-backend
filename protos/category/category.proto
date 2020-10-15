@@ -45,43 +45,45 @@ message DeleteResponse{
 
 //查询类别请求结构体
 message QueryRequest{
-
+  //@inject_tag: json:"keyword"
+  string keyword =1;//关键词
 }
 //查询类别返回结构体
 message QueryResponse{
-  message Category{
-    //@inject_tag: json:"id"
-    string id = 1; //物理id
-    //@inject_tag: json:"title"
-    string title = 2; //标题
-    //@inject_tag: json:"url"
-    string url = 3; //url
-    //@inject_tag: json:"url,omitempty"
-    repeated string tags = 4; //包含的子标签
-    //@inject_tag: json:"sort"
-    string sort = 5;
-    //@inject_tag: json:"created_time"
-    string created_time = 6;
-    //@inject_tag: json:"updated_time"
-    string updated_time = 7;
-  }
-  repeated Category List=1;
+  //@inject_tag: json:"count"
+  int32 count = 1;
+  //@inject_tag: json:"page_size"
+  int32 page_size = 2;
+  //@inject_tag: json:"list"
+  repeated CategorySchema list=3;
 }
 
-message PageInfo{
-  //@inject_tag: json:"size"
-  int32 Size = 1; //每页显示数量
-  //@inject_tag: json:"page"
-  int32 Page = 2; //当前页
-  //@inject_tag: json:"total_page"
-  int32 TotalPage = 3; //总页数
-  //@inject_tag: json:"total_count"
-  int32 TotalCount = 4; //总条数
+message QueryOneRequest {
+  //@inject_tag: json:"id"
+  string id =1;//物理id
+}
+
+message CategorySchema {
+  //@inject_tag: json:"id"
+  string id = 1; //物理id
+  //@inject_tag: json:"title"
+  string title = 2; //标题
+  //@inject_tag: json:"url"
+  string url = 3; //url
+  //@inject_tag: json:"url,omitempty"
+  repeated string tags = 4; //包含的子标签
+  //@inject_tag: json:"sort"
+  string sort = 5;
+  //@inject_tag: json:"created_time"
+  string created_time = 6;
+  //@inject_tag: json:"updated_time"
+  string updated_time = 7;
 }
 
 service Category{
+    rpc Get(QueryOneRequest) returns (CategorySchema);
     rpc Query(QueryRequest) returns (QueryResponse);
-    rpc Add(AddRequest) returns (AddResponse);
+    rpc Create(AddRequest) returns (AddResponse);
     rpc Edit(EditRequest) returns (EditResponse);
     rpc Delete(DeleteRequest) returns(DeleteResponse);
 }

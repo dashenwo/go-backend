@@ -2,6 +2,7 @@ package main
 
 import (
 	conf "github.com/dashenwo/go-backend/v2/console/account/config"
+	"github.com/dashenwo/go-backend/v2/console/account/global"
 	"github.com/dashenwo/go-backend/v2/console/account/handler"
 	"github.com/dashenwo/go-backend/v2/console/account/registry"
 	tracer "github.com/dashenwo/go-backend/v2/pkg/opentracing"
@@ -76,6 +77,9 @@ func main() {
 	)
 	// 初始化服务
 	service.Init()
+
+	// 设置grpc客户端
+	global.ReqClient = service.Client()
 
 	c, err := registry.NewContainer()
 	if err != nil {
